@@ -4,6 +4,14 @@ const selCat = document.getElementById('cat'), selCity = document.getElementById
 const elSummary = document.getElementById('summary');
 const distEls = { chong: document.getElementById('n-chong'), wen: document.getElementById('n-wen'), bao: document.getElementById('n-bao') };
 let mode = 'fit', nat = '';
+/* 只有结构性切换（类别/城市/性质/标签）才让榜单逐行落下；敲分数时不重放动画 */
+let stag = true;
+/* 兜底：任何环境下动画若没跑完（后台标签页、省电模式、动画被冻结），
+   到点就把 stag 摘掉，元素立刻回到可见终态，绝不会停在 opacity:0。 */
+let stagT = 0;
+function unstag() {
+  document.querySelectorAll('.ranklist.stag').forEach(x => x.classList.remove('stag'));
+}
 
 CATS.forEach((c, i) => {
   const o = document.createElement('option');
@@ -30,14 +38,17 @@ document.getElementById('hsum').textContent = Object.keys(SCHOOLS).length + ' �
 document.getElementById('tabs').onclick = e => {
   const t = e.target.closest('.tab'); if (!t) return;
   document.querySelectorAll('#tabs .tab').forEach(x => x.classList.toggle('on', x === t));
-  mode = t.dataset.mode; render();
+  mode = t.dataset.mode; stag = true; render();
 };
 document.getElementById('nat').onclick = e => {
   const c = e.target.closest('.chip'); if (!c) return;
   document.querySelectorAll('#nat .chip').forEach(x => x.classList.toggle('on', x === c));
-  nat = c.dataset.nat; render();
+  nat = c.dataset.nat; stag = true; render();
 };
-elQ.oninput = render; elKw.oninput = render; selCat.onchange = render; selCity.onchange = render;
+elQ.oninput = () => { stag = false; render(); };
+elKw.oninput = () => { stag = false; render(); };
+selCat.onchange = () => { stag = true; render(); };
+selCity.onchange = () => { stag = true; render(); };
 
 // 从详情页返回时带回分数与类别/城市
 (function () {
@@ -71,7 +82,8 @@ function split(rows, score) {
 
 function cardOf(sk, st, score, extra, index) {
   const s = SCHOOLS[sk];
-  const href = 'school.html?k=' + encodeURIComponent(sk) + '&cat=' + selCat.value
+  // 每校一个静态页 s/<skey>.html；类别/分数/城市走 query 传回详情页
+  const href = 's/' + encodeURIComponent(sk) + '.html?cat=' + selCat.value
     + (score != null ? '&score=' + score : '') + (selCity.value ? '&city=' + encodeURIComponent(selCity.value) : '');
   const lo = st.ok.length ? st.ok[0].m : null;
   const diff = (score != null && lo != null) ? score - lo : null;
@@ -102,10 +114,21 @@ function cardOf(sk, st, score, extra, index) {
         + (any ? ' <span class="none">（部分组不限）</span>' : '') + '</div>';
     }
   }
+  let feeTxt = '';
+  (function () {
+    const vs = [];
+    (st.rows || st.ok || []).forEach(r => {
+      if (r.fee == null) return;
+      String(r.fee).split('~').forEach(v => { const n = +v; if (n) vs.push(n); });
+    });
+    if (!vs.length) return;
+    const lo2 = Math.min.apply(null, vs), hi2 = Math.max.apply(null, vs);
+    feeTxt = lo2 === hi2 ? lo2.toLocaleString() : lo2.toLocaleString() + '–' + hi2.toLocaleString();
+  })();
   const scHtml = lo != null
     ? '<b>' + lo + '</b><i>' + (score != null && diff >= 0 ? '可报最低线' : '最低投档线') + '</i>'
     : (nAll ? '<b style="color:#a79e91">—</b><i>高于你的分数</i>' : '<b style="color:#a79e91">—</b><i>无人投档</i>');
-  return '<a class="card' + (diff != null && diff >= 0 ? ' hit' : '') + '" href="' + href + '">'
+  return '<a class="card' + (diff != null && diff >= 0 ? ' hit' : '') + '" style="--i:' + index + '" href="' + href + '">'
     + '<div class="idx">' + String(index + 1).padStart(2, '0') + '</div>'
     + '<div class="name">' + esc(s.n)
     + '<span class="nat ' + (s.t === '民办' ? 'pvt' : 'pub') + '">' + esc(s.t) + '</span>'
@@ -118,6 +141,8 @@ function cardOf(sk, st, score, extra, index) {
     + (score != null && nOk && diff >= 0 ? '<span class="oktxt">可报 ' + nOk + ' 组</span>' : '')
     + '<span>共 ' + nAll + ' 组</span>'
     + (st.plan ? '<span>计划 ' + st.plan + ' 人</span>' : '')
+    + (feeTxt ? '<span class="fee">学费 ' + feeTxt + '</span>' : '')
+    + (lo != null && st.ok[0].r ? '<span class="rank">最低排位 ' + st.ok[0].r.toLocaleString() + '</span>' : '')
     + (diff != null ? '<span>' + (diff >= 0 ? '高出 ' + diff + ' 分' : '差 ' + (-diff) + ' 分') + '</span>' : '')
     + (extra || '')
     + '</div>' + (certHtml || '') + majHtml + '</a>';
@@ -126,7 +151,7 @@ function cardOf(sk, st, score, extra, index) {
 function setDist(rows, score) {
   if (score == null) {
     elSummary.innerHTML = '输入分数，马上看能报哪些学校';
-    distEls.chong.textContent = distEls.wen.textContent = distEls.bao.textContent = '—';
+    ['chong', 'wen', 'bao'].forEach(k => setNum(distEls[k], '—'));
     return;
   }
   const seen = { chong: new Set(), wen: new Set(), bao: new Set() };
@@ -141,10 +166,20 @@ function setDist(rows, score) {
       seen[k].add(sk); nOk++;
     });
   });
-  distEls.chong.textContent = seen.chong.size;
-  distEls.wen.textContent = seen.wen.size;
-  distEls.bao.textContent = seen.bao.size;
+  setNum(distEls.chong, seen.chong.size);
+  setNum(distEls.wen, seen.wen.size);
+  setNum(distEls.bao, seen.bao.size);
   elSummary.innerHTML = '<b>' + score + '</b> 分：达到 <b>' + nOk + '</b> 个专业组投档线';
+}
+
+/* 数字变化时给一次短促的顶起，值没变就不动 */
+function setNum(el, v) {
+  v = String(v);
+  if (el.textContent === v) return;
+  el.textContent = v;
+  el.classList.remove('pop');
+  void el.offsetWidth;
+  el.classList.add('pop');
 }
 
 function render() {
@@ -175,16 +210,19 @@ function render() {
   });
 
   const keys = Object.keys(bySchool);
+  const RL = 'ranklist' + (stag ? ' stag' : '');
+  clearTimeout(stagT);
+  if (stag) stagT = setTimeout(unstag, 700);
   const nPub = keys.filter(k => SCHOOLS[k].t === '公办').length;
   const nPvt = keys.filter(k => SCHOOLS[k].t === '民办').length;
   const statOf = txt => '<div class="stat"><span>' + txt + (city ? ' · ' + esc(city) : '') + '</span><span>共 <b>' + keys.length + '</b> 所院校（公办 <b>' + nPub + '</b> / 民办 <b>' + nPvt + '</b>）</span></div>';
 
   if (mode === 'all') {
     keys.sort((a, b) => SCHOOLS[a].n.localeCompare(SCHOOLS[b].n, 'zh'));
-    elOut.innerHTML = statOf(esc(cat)) + '<div class="ranklist">' + keys.map((sk, i) => {
+    elOut.innerHTML = statOf(esc(cat)) + '<div class="' + RL + '">' + keys.map((sk, i) => {
       const st = bySchool[sk];
       const ok = score == null ? st.rows.filter(r => r.m != null).sort((a, b) => b.m - a.m) : split(st.rows, score).ok;
-      return cardOf(sk, { ok: ok.length ? ok : st.rows.filter(r => r.m != null).sort((a, b) => b.m - a.m), all: st.all, plan: st.plan }, score, '', i);
+      return cardOf(sk, { ok: ok.length ? ok : st.rows.filter(r => r.m != null).sort((a, b) => b.m - a.m), all: st.all, plan: st.plan, rows: st.rows }, score, '', i);
     }).join('') + '</div>';
     return;
   }
@@ -193,9 +231,9 @@ function render() {
     if (!kw) { elOut.innerHTML = '<div class="empty"><strong>输 入 分 数</strong>院校、专业组与冲稳保一次看清<br>也可以切到「全部院校」先按城市或办学性质浏览</div>'; return; }
     keys.sort((a, b) => SCHOOLS[a].n.localeCompare(SCHOOLS[b].n, 'zh'));
     elOut.innerHTML = '<div class="stat"><span>「' + esc(elKw.value.trim()) + '」命中 <b>' + keys.length + '</b> 所院校</span></div>'
-      + '<div class="ranklist">' + keys.map((sk, i) => {
+      + '<div class="' + RL + '">' + keys.map((sk, i) => {
         const st = bySchool[sk], ok = st.rows.filter(r => r.m != null).sort((a, b) => b.m - a.m);
-        return cardOf(sk, { ok, all: st.all, plan: st.plan }, null, '', i);
+        return cardOf(sk, { ok, all: st.all, plan: st.plan, rows: st.rows }, null, '', i);
       }).join('') + '</div>';
     return;
   }
@@ -203,8 +241,8 @@ function render() {
   const okList = [], nearList = [];
   keys.forEach(sk => {
     const st = bySchool[sk], sp = split(st.rows, score);
-    if (sp.ok.length) okList.push({ sk, sp, all: st.all, plan: st.plan });
-    else if (sp.near.length) nearList.push({ sk, sp, all: st.all, plan: st.plan });
+    if (sp.ok.length) okList.push({ sk, sp, all: st.all, plan: st.plan, rows: st.rows });
+    else if (sp.near.length) nearList.push({ sk, sp, all: st.all, plan: st.plan, rows: st.rows });
   });
   okList.sort((a, b) => b.sp.ok.length - a.sp.ok.length || b.sp.ok[0].m - a.sp.ok[0].m);
   nearList.sort((a, b) => a.sp.near[0].m - b.sp.near[0].m);
@@ -218,11 +256,11 @@ function render() {
   const nGrp = okList.reduce((a, x) => a + x.sp.ok.length, 0);
   let h = '<div class="stat"><span>' + esc(cat) + ' · <b class="r">' + score + '</b> 分可报 <b>' + nGrp + '</b> 个专业组</span><span><b>'
     + okList.length + '</b> 所院校（公办 <b>' + nOkPub + '</b> / 民办 <b>' + nOkPvt + '</b>）</span></div>';
-  if (okList.length) h += '<div class="ranklist">' + okList.map((x, i) => cardOf(x.sk, { ok: x.sp.ok, all: x.all, plan: x.plan }, score, '', i)).join('') + '</div>';
+  if (okList.length) h += '<div class="' + RL + '">' + okList.map((x, i) => cardOf(x.sk, { ok: x.sp.ok, all: x.all, plan: x.plan, rows: x.rows }, score, '', i)).join('') + '</div>';
   else h += '<div class="hint">没有达到任何院校的投档线，下面是差 15 分以内的院校。</div>';
   if (nearList.length) {
     h += '<div class="near-ttl">差一点 · 投档线高于你的分数（' + nearList.length + ' 所）</div>'
-      + '<div class="ranklist">' + nearList.map((x, i) => cardOf(x.sk, { ok: x.sp.near, all: x.all, plan: x.plan }, score, '', i)).join('') + '</div>';
+      + '<div class="' + RL + '">' + nearList.map((x, i) => cardOf(x.sk, { ok: x.sp.near, all: x.all, plan: x.plan }, score, '', i)).join('') + '</div>';
   }
   elOut.innerHTML = h;
 }
